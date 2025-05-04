@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>雷达扫描</title>
+    <style>
+        body {
+            background: #000;
+            margin: 0;
+            overflow: hidden;
+        }
+        
+        #radar {
+            position: relative;
+            width: 600px;
+            height: 600px;
+            margin: 20px auto;
+        }
+        
+        #canvas {
+            background: linear-gradient(to bottom, #001300, #000);
+            border-radius: 50%;
+            box-shadow: 0 0 20px #0f0;
+            transition: all 2s ease;
+        }
+        
+        .scan-line {
+            position: absolute;
+            width: 100%;
+            height: 2px;
+            background: linear-gradient(to right, transparent 10%, #0f0 90%);
+            top: 50%;
+            animation: scan 4s linear infinite;
+            transform-origin: top center;
+        }
+        
+        @keyframes scan {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .target {
+            position: absolute;
+            width: 6px;
+            height: 6px;
+            background: #0f0;
+            border-radius: 50%;
+            box-shadow: 0 0 10px #0f0;
+        }
+        
+        .controls {
+            text-align: center;
+            color: #0f0;
+            padding: 20px;
+        }
+        
+        button {
+            background: #002200;
+            color: #0f0;
+            border: 1px solid #0f0;
+            padding: 10px 20px;
+            cursor: pointer;
+            margin: 0 10px;
+            transition: all 0.3s ease;  /* 新增过渡效果 */
+            transform: scale(1);
+            box-shadow: 0 0 0 #0f0;
+        }
+
+        button:hover {
+            transform: scale(1.05);  /* 悬停放大 */
+            background: #004400;
+            box-shadow: 0 0 15px #0f0;
+        }
+
+        button:active {
+            transform: scale(0.95);  /* 点击缩小 */
+            transition-duration: 0.1s;
+        }
+
+        /* 新增扫描状态指示 */
+        #scanButton[data-scanning="true"] {
+            background: #008800;
+            box-shadow: 0 0 20px #0f0;
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.08); }
+            100% { transform: scale(1); }
+        }
+    </style>
+</head>
+<body>
+    <div class="controls">
+        <button id="scanButton" onclick="startScan()" data-scanning="false">开始扫描</button>
+        <button onclick="stopScan()">停止扫描</button>
+        <span id="scoreDisplay" style="margin-left: 20px; color: #0f0;">积分: 0</span>
+        <div id="durabilityBar" style="margin-left: 20px; width: 200px; height: 10px; background: #002200; display: inline-block;">
+            <div id="durabilityProgress" style="width: 100%; height: 100%; background: #0f0; transition: width 0.3s;"></div>
+        </div>
+    </div>
+    <div id="radar">
+        <canvas id="canvas" width="600" height="600"></canvas>
+        <div class="scan-line"></div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        let animationId;
+        let targets = [];
+        let specialTarget = null;
+        let radarAlert = false;
+        let score = 0;
+        let hitCount = 0;  // 新增耐久计数器
+        
+        function drawRadarBase() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // 绘制雷达网格
+            ctx.strokeStyle = '#0f03';
+            ctx.lineWidth = 1;
+            
+            // 同心圆
+            for(let r = 100; r <= 300; r += 100) {
+                ctx.beginPath();
+                ctx.arc(300, 300, r, 0, Math.PI*2);
+                ctx.stroke();
+            }
+            
+            // 十字坐标线
+            ctx.beginPath();
+            ctx.moveTo(300, 0);
+            ctx.lineTo(300, 600);
+            ctx.moveTo(0, 300);
+            ctx.lineTo(600, 300);
+            ctx.stroke();
+        }
+        
+        function generateTarget() {
+            // 在雷达边缘随机位置生成（半径280-300像素）
+            const edgeAngle = Math.random() * Math.PI * 2;
+            const edgeRadius = 280 + Math.random() * 20;
+            
+            // 计算起始坐标
+            const startX = 300 + Math.cos(edgeAngle) * edgeRadius;
+            const startY = 300 + Math.sin(edgeAngle) * edgeRadius;
+            
+            // 计算朝向对面方向（当前角度的反方向+随机偏移）
+            const direction = edgeAngle + Math.PI + (Math.random() - 0.5) * 0.2;
+            
+            return {
+                x: startX,
+                y: startY,
+                speed: Math.random() * 0.5 + 0.8, // 速度范围0.8~1.3
+                direction: direction
+            };
+        }
+
+        // 添加canvas点击事件监听
+        canvas.addEventListener('click', function(e) {
+            if (specialTarget) {
+                const rect = canvas.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+                
+                // 判断点击是否在目标范围内
+                const dx = x - specialTarget.x;
+                const dy = y - specialTarget.y;
+                if (Math.sqrt(dx*dx + dy*dy) < 10) {
+                    specialTarget = null;
+                    radarAlert = false;
+                    score += 500;
+                    document.getElementById('scoreDisplay').textContent = `积分: ${score}`;
+                    // 新增耐久恢复逻辑
+                    hitCount = Math.max(0, hitCount - 1);
+                    document.getElementById('durabilityProgress').style.width = `${100 - (hitCount/3*100)}%`;
+                }
+            }
+        });
+
+        function generateSpecialTarget() {
+            return {
+                x: 300 + Math.cos(Math.random() * Math.PI*2) * 350,  // 将半径从280增加到350
+                y: 300 + Math.sin(Math.random() * Math.PI*2) * 350,
+                speed: 2.5,
+                life: 9999
+            };
+        }
+
+        function updateTargets() {
+            // 进一步降低生成概率到1%
+            if(Math.random() < 0.01) {  
+                targets.push(generateTarget());
+            }
+            
+            // 更新目标生命周期和位置
+            targets = targets.filter(t => {
+                // 边缘检测（雷达半径300像素）
+                const dx = t.x - 300;
+                const dy = t.y - 300;
+                const distance = Math.sqrt(dx*dx + dy*dy);
+                
+                // 沿固定方向移动（移除方向随机变化）
+                t.x += Math.cos(t.direction) * t.speed;
+                t.y += Math.sin(t.direction) * t.speed;
+                
+                return distance < 300;
+            });
+        
+            // 极低概率触发特殊事件（0.1%）
+            if(!specialTarget && Math.random() < 0.001) {
+                specialTarget = generateSpecialTarget();
+                radarAlert = true;
+            }
+        
+            // 更新特殊目标位置
+            if(specialTarget) {
+                const dx = 300 - specialTarget.x;
+                const dy = 300 - specialTarget.y;
+                const dist = Math.sqrt(dx*dx + dy*dy);
+                
+                if(dist <= 2) {  // 当目标接触中心时
+                    hitCount++;
+                    document.getElementById('durabilityProgress').style.width = `${100 - (hitCount/3*100)}%`;
+                    
+                    if(hitCount >= 3) {
+                        stopScan();
+                        if(confirm('雷达已被摧毁！是否关闭？')) {
+                            window.close();
+                        }
+                        hitCount = 0;
+                    }
+                    
+                    specialTarget = null;
+                    radarAlert = false;
+                    return;
+                }
+                
+                if(dist > 2) {
+                    specialTarget.x += dx/dist * specialTarget.speed;
+                    specialTarget.y += dy/dist * specialTarget.speed;
+                }
+            }
+        }
+        
+        // 修改雷达颜色样式
+        const radarStyle = document.getElementById('canvas').style;
+        function updateRadarColor() {
+            if(radarAlert) {
+                radarStyle.background = 'linear-gradient(to bottom, #330000, #000)';
+                radarStyle.boxShadow = '0 0 20px #f00';
+            } else {
+                radarStyle.background = 'linear-gradient(to bottom, #001300, #000)';
+                radarStyle.boxShadow = '0 0 20px #0f0';
+            }
+        }
+        
+        // 修改animate函数
+        function animate() {
+            drawRadarBase();
+            updateTargets();
+            updateRadarColor();
+            
+            // 绘制特殊目标
+            if(specialTarget) {
+                ctx.fillStyle = '#f00';
+                ctx.beginPath();
+                ctx.arc(specialTarget.x, specialTarget.y, 8, 0, Math.PI*2);
+                ctx.fill();
+            }
+            
+            // 绘制目标
+            ctx.fillStyle = '#0f0';
+            targets.forEach(t => {
+                ctx.beginPath();
+                ctx.arc(t.x, t.y, 3, 0, Math.PI*2);
+                ctx.fill();
+            });
+            
+            animationId = requestAnimationFrame(animate);
+        }
+        
+        function startScan() {
+            if(!animationId) {
+                const scanButton = document.getElementById('scanButton');
+                scanButton.dataset.scanning = "true";
+                scanButton.innerText = '扫描中...';  // 修改按钮文字
+                animate();
+            }
+        }
+        
+        function stopScan() {
+            cancelAnimationFrame(animationId);
+            animationId = null;
+            // 新增清除目标逻辑
+            targets = [];  // 清空普通目标数组
+            specialTarget = null;  // 清除特殊目标
+            radarAlert = false;  // 重置警报状态
+            score = 0;  // 重置积分为0
+            document.getElementById('scoreDisplay').textContent = '积分: 0';  // 更新积分显示
+            drawRadarBase();  // 重绘基础雷达界面
+            hitCount = 0;  // 新增重置耐久
+            document.getElementById('durabilityProgress').style.width = '100%';
+            const scanButton = document.getElementById('scanButton');
+            scanButton.dataset.scanning = "false";
+            scanButton.innerText = '开始扫描';  // 恢复按钮文字
+        }
+        
+        // 初始化
+        drawRadarBase();
+    </script>
+    <!-- 在body标签内添加规则说明 -->
+    <div id="gameRules" style="position: fixed; left: 15px; top: 8%; transform: translateY(-50%); color: #0f0; font-size: 20px; opacity: 0.8; line-height: 1.6; background: rgba(0,30,0,0.5); padding: 15px; border-radius: 5px;">
+        <div>游戏规则：</div>
+        <div>1.被导弹击中三次结束</div>
+        <div>2.击落一次导弹加500分，且回一次耐久</div>
+        <div>3.停止搜索则全部重置</div>
+    </div>
+<style>
+        #gameRules:hover {
+            opacity: 1;
+            text-shadow: 0 0 8px #0f0;
+            transition: all 0.3s ease;
+        }
+    </style>
+    <!-- 在body标签结束前修改为 -->
+    <a href="https://space.bilibili.com/546088813" id="authorCredit" target="_blank" style="position: fixed; right: 20px; bottom: 10px; color: #0f0; text-decoration: none; font-size: 25px; font-family: Arial, sans-serif; opacity: 0.7;">By Heng-mc</a>
+    <style>
+        #authorCredit:hover {
+            opacity: 1;
+            text-shadow: 0 0 10px #0f0;
+            transition: all 0.3s ease;
+        }
+    </style>
+    <!-- 在body结束标签前新增 -->
+    <div id="crosshair" style="position: fixed; width: 20px; height: 20px; pointer-events: none; display: none;">
+        <div style="position: absolute; width: 100%; height: 2px; background: #0f0; top: 50%; transform: translateY(-50%); box-shadow: 0 0 5px #0f0;"></div>
+        <div style="position: absolute; width: 2px; height: 100%; background: #0f0; left: 50%; transform: translateX(-50%); box-shadow: 0 0 5px #0f0;"></div>
+    </div>
+    
+    <script>
+        // 新增鼠标追踪
+        document.addEventListener('mousemove', (e) => {
+            const crosshair = document.getElementById('crosshair');
+            crosshair.style.left = `${e.clientX - 10}px`;
+            crosshair.style.top = `${e.clientY - 10}px`;
+            crosshair.style.display = 'block';
+        });
+        
+        document.addEventListener('mouseleave', () => {
+            document.getElementById('crosshair').style.display = 'none';
+        });
+    </script>
+</body>
+</html>
